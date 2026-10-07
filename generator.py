@@ -11,7 +11,7 @@ Modly hands generators a single image, so extra views travel inside it:
                                        │ back  │ right │
                                        └───────┴───────┘
   layout = "row"     turnaround strip, left to right: front, left, back[, right],
-                     split at the empty gaps between the figures
+                     split into the separate figures (arms may overlap, not touch)
   layout = "single"  the image is the front view only
   layout = "auto"    picks one of the above from where the figures are
 
@@ -210,36 +210,30 @@ class Hunyuan3DMVGenerator(BaseGenerator):
         if layout not in _LAYOUTS:
             raise ValueError(f"Unknown layout '{layout}'. Use one of: {', '.join(_LAYOUTS)}.")
 
-        col_runs = row_runs = None
+        figures = None
         if layout in ("auto", "row"):
-            mask = self._foreground_mask(image)
-            sx, sy   = image.width / mask.width, image.height / mask.height
-            col_runs = [(round(a * sx), round(b * sx)) for a, b in self._runs(mask, axis=0)]
-            row_runs = [(round(a * sy), round(b * sy)) for a, b in self._runs(mask, axis=1)]
+            figures = self._split_figures(image)
             if layout == "auto":
+                mask     = self._foreground_mask(image)
+                row_runs = self._runs(mask, axis=1)
                 if len(row_runs) >= 2:
                     layout = "grid"
-                elif len(col_runs) >= 2:
+                elif len(figures) >= 2:
                     layout = "row"
                 else:
                     layout = "single"
                 print(f"[Hunyuan3DMVGenerator] Auto layout: {layout} "
-                      f"({len(col_runs)} column group(s), {len(row_runs)} row group(s))")
+                      f"({len(figures)} figure(s), {len(row_runs)} row group(s))")
 
         if layout == "single":
             views = {"front": image}
         elif layout == "row":
-            if not 1 <= len(col_runs) <= len(_VIEWS):
+            if not 1 <= len(figures) <= len(_VIEWS):
                 raise ValueError(
-                    f"Found {len(col_runs)} separate figures in the strip; expected 1-4 "
-                    "(front, left, back, right) with empty space between them."
+                    f"Found {len(figures)} separate figures in the strip; expected 1-4 "
+                    "(front, left, back, right) that don't touch each other."
                 )
-            w, h = image.size
-            cuts = [0] + [(a[1] + b[0]) // 2 for a, b in zip(col_runs, col_runs[1:])] + [w]
-            views = {
-                view: image.crop((cuts[i], 0, cuts[i + 1], h))
-                for i, view in enumerate(_VIEWS[:len(col_runs)])
-            }
+            views = dict(zip(_VIEWS, figures))
         elif layout == "grid":
             w, h   = image.size
             hw, hh = w // 2, h // 2
@@ -271,11 +265,70 @@ class Hunyuan3DMVGenerator(BaseGenerator):
             )
         return {v: views[v] for v in _VIEWS if v in views}
 
+    @classmethod
+    def _split_figures(cls, image: Image.Image) -> list:
+        """
+        Figures of a turnaround strip, left to right, each cropped on its own.
+
+        Figures are the connected shapes at least 60% as tall as the tallest one;
+        smaller detached bits (a loose strand of hair, a gem) join the figure they sit
+        under. Splitting by shape rather than by empty columns lets T-pose arms reach
+        past the next figure, and anything of a neighbour inside a crop is blanked out.
+        """
+        import numpy as np
+        from scipy import ndimage
+
+        fg = np.asarray(cls._foreground_mask(image, max_side=None)) > 0
+        labels, count = ndimage.label(fg)
+        if count == 0:
+            return []
+        boxes   = ndimage.find_objects(labels)
+        areas   = ndimage.sum_labels(fg, labels, index=range(1, count + 1))
+        heights = [b[0].stop - b[0].start for b in boxes]
+        tallest = max(heights)
+        main = sorted(
+            (i for i in range(count) if heights[i] >= tallest * 0.6),
+            key=lambda i: (boxes[i][1].start + boxes[i][1].stop) / 2,
+        )
+        centres = [(boxes[i][1].start + boxes[i][1].stop) / 2 for i in main]
+
+        owner = np.zeros(count + 1, dtype=np.int32)  # label -> figure number + 1, 0 = dropped
+        for i in range(count):
+            if i in main:
+                owner[i + 1] = main.index(i) + 1
+            elif areas[i] >= 16:
+                cx = (boxes[i][1].start + boxes[i][1].stop) / 2
+                owner[i + 1] = int(np.argmin([abs(cx - c) for c in centres])) + 1
+        figure_of = owner[labels]
+
+        rgba = np.array(image.convert("RGBA"))
+        opaque = rgba[..., 3].min() >= 250
+        if opaque:
+            h, w = fg.shape
+            corners = rgba[[0, 0, h - 1, h - 1], [0, w - 1, 0, w - 1], :3]
+            bg = np.median(corners, axis=0).astype(np.uint8)
+
+        figures = []
+        for n in range(1, len(main) + 1):
+            ys, xs = np.nonzero(figure_of == n)
+            pad = max(4, int(0.03 * (ys.max() - ys.min())))
+            y0, y1 = max(0, ys.min() - pad), min(fg.shape[0], ys.max() + 1 + pad)
+            x0, x1 = max(0, xs.min() - pad), min(fg.shape[1], xs.max() + 1 + pad)
+            crop  = rgba[y0:y1, x0:x1].copy()
+            other = (figure_of[y0:y1, x0:x1] != n) & fg[y0:y1, x0:x1]
+            if opaque:
+                crop[other, :3] = bg  # keep it opaque so background removal still runs
+            else:
+                crop[other, 3] = 0
+            figures.append(Image.fromarray(crop, "RGBA"))
+        return figures
+
     @staticmethod
-    def _foreground_mask(image: Image.Image) -> Image.Image:
-        """Binary mask of the figures, downscaled for speed (only proportions matter)."""
+    def _foreground_mask(image: Image.Image, max_side: Optional[int] = 512) -> Image.Image:
+        """Binary mask of the figures, downscaled to max_side for speed when given."""
         img = image.convert("RGBA")
-        img.thumbnail((512, 512))
+        if max_side:
+            img.thumbnail((max_side, max_side))
         alpha = img.getchannel("A")
         if alpha.getextrema()[0] < 250:
             return alpha.point(lambda a: 255 if a > 16 else 0)
@@ -356,17 +409,38 @@ class Hunyuan3DMVGenerator(BaseGenerator):
     # ------------------------------------------------------------------ #
 
     @staticmethod
-    def _remove_floaters(mesh, min_share: float = 0.005):
-        """Drops disconnected pieces smaller than min_share of all faces (stray specks)."""
+    def _remove_floaters(mesh, min_share: float = 0.005, max_share: float = 0.1, overhang: float = 0.1):
+        """
+        Drops disconnected pieces that are either specks (under min_share of all faces)
+        or stray rods and sheets. The model sometimes leaves thin pieces running straight
+        along the depth axis; a smaller piece (under max_share) counts as one when it
+        sticks out of the main body's bounding box by more than `overhang` of its size,
+        or when it is a thin rod or sheet whose longest side is the depth axis.
+        """
+        import numpy as np
         import trimesh
         try:
             parts = mesh.split(only_watertight=False)
         except Exception as exc:
             print(f"[Hunyuan3DMVGenerator] Floater removal skipped: {exc}")
             return mesh
-        keep = [p for p in parts if len(p.faces) >= len(mesh.faces) * min_share]
-        if len(parts) <= 1 or not keep:
+        if len(parts) <= 1:
             return mesh
+        main   = max(parts, key=lambda p: len(p.faces))
+        margin = main.extents * overhang
+        lo, hi = main.bounds[0] - margin, main.bounds[1] + margin
+
+        def stray(p) -> bool:
+            if len(p.faces) < len(mesh.faces) * min_share:
+                return True
+            if len(p.faces) >= len(mesh.faces) * max_share:
+                return False
+            sticks_out = np.any(p.bounds[0] < lo) or np.any(p.bounds[1] > hi)
+            ext = p.extents
+            depth_rod = int(np.argmax(ext)) == 2 and np.sort(ext)[1] < ext.max() * 0.1
+            return bool(sticks_out or depth_rod)
+
+        keep = [p for p in parts if p is main or not stray(p)]
         print(f"[Hunyuan3DMVGenerator] Removed {len(parts) - len(keep)} floating piece(s).")
         return trimesh.util.concatenate(keep)
 

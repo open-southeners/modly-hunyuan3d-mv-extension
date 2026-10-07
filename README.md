@@ -11,9 +11,8 @@ Modly passes one image to a generator, so the views travel inside it. Two layout
 understood, and **Input Layout = Auto detect** (the default) tells them apart:
 
 **Turnaround strip**: figures side by side, left to right: front, left, back and
-optionally right, with some empty space between them. This is the usual character
-turnaround sheet; the image is split at the gaps, so T-pose arms are fine as long as
-they don't touch the next figure.
+optionally right. This is the usual character turnaround sheet. Each figure is cut out
+on its own, so T-pose arms may reach past the next figure as long as they don't touch it.
 
 ```
  front    left    back   (right)
@@ -35,7 +34,7 @@ they don't touch the next figure.
 - Keep the same distance, height and lighting in every view, with the object centred.
 - Backgrounds are removed automatically; images that already have a transparent
   background keep their own cut-out. On an opaque strip, the background should be one
-  plain colour so the gaps between figures can be found.
+  plain colour so the figures can be told apart.
 - A single ordinary photo is detected as a single front view.
 
 Build a sheet from separate photos with the bundled helper (needs Python + Pillow):
@@ -54,8 +53,9 @@ modly workflow-run from-image --image /abs/front.jpg --model hunyuan3d-mv/genera
   --params-json '{"layout":"single","back_image_path":"/abs/back.jpg","left_image_path":"/abs/left.jpg"}'
 ```
 
-Small disconnected specks (under 0.5% of the mesh) are removed automatically; pass
-`"remove_floaters": false` in the params to keep everything.
+Loose bits the model sometimes leaves behind are removed automatically: tiny specks,
+and thin stray rods or sheets running front-to-back or poking out of the object's
+bounds. Pass `"remove_floaters": false` in the params to keep everything.
 
 ## Installing on another machine
 

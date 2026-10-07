@@ -3,7 +3,7 @@
   "name": "Hunyuan3D 2 MV",
   "type": "model",
   "description": "Multi-view Hunyuan3D 2 shape generation. Upload a turnaround strip (front, left, back, right), a 2x2 view sheet or a single front image; the layout is detected automatically. Geometry only, no textures.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "author": "Open Southeners",
   "generator_class": "Hunyuan3DMVGenerator",
   "tags": [
@@ -47,7 +47,7 @@
               "label": "Single front image"
             }
           ],
-          "tooltip": "Auto detects the layout. 2x2 sheet: front | left / back | right. Strip: front, left, back[, right] side by side with space between. Blank cells are skipped."
+          "tooltip": "Auto detects the layout. 2x2 sheet: front | left / back | right. Strip: front, left, back[, right] side by side, not touching. Blank cells are skipped."
         },
         {
           "id": "num_inference_steps",
