@@ -182,6 +182,10 @@ class Hunyuan3DMVGenerator(BaseGenerator):
 
         self._check_cancelled(cancel_event)
 
+        if params.get("remove_floaters", True) not in (False, "false", 0, "0"):
+            self._report(progress_cb, 84, "Removing floating specks…")
+            mesh = self._remove_floaters(mesh)
+
         if vert_count > 0 and hasattr(mesh, "vertices") and len(mesh.vertices) > vert_count:
             self._report(progress_cb, 85, "Optimizing mesh…")
             mesh = self._decimate(mesh, vert_count)
@@ -350,6 +354,21 @@ class Hunyuan3DMVGenerator(BaseGenerator):
     # ------------------------------------------------------------------ #
     # Helpers
     # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _remove_floaters(mesh, min_share: float = 0.005):
+        """Drops disconnected pieces smaller than min_share of all faces (stray specks)."""
+        import trimesh
+        try:
+            parts = mesh.split(only_watertight=False)
+        except Exception as exc:
+            print(f"[Hunyuan3DMVGenerator] Floater removal skipped: {exc}")
+            return mesh
+        keep = [p for p in parts if len(p.faces) >= len(mesh.faces) * min_share]
+        if len(parts) <= 1 or not keep:
+            return mesh
+        print(f"[Hunyuan3DMVGenerator] Removed {len(parts) - len(keep)} floating piece(s).")
+        return trimesh.util.concatenate(keep)
 
     def _decimate(self, mesh, target_vertices: int):
         target_faces = max(4, target_vertices * 2)

@@ -54,6 +54,9 @@ modly workflow-run from-image --image /abs/front.jpg --model hunyuan3d-mv/genera
   --params-json '{"layout":"single","back_image_path":"/abs/back.jpg","left_image_path":"/abs/left.jpg"}'
 ```
 
+Small disconnected specks (under 0.5% of the mesh) are removed automatically; pass
+`"remove_floaters": false` in the params to keep everything.
+
 ## Installing on another machine
 
 The extension is just this folder; it works on macOS (Apple Silicon/MPS) and
