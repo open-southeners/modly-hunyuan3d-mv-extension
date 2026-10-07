@@ -7,7 +7,19 @@ gives noticeably more faithful shapes. Output is geometry only (no textures).
 
 ## Giving it several views
 
-Modly passes one image to a generator, so the views travel inside it as a **2x2 sheet**:
+Modly passes one image to a generator, so the views travel inside it. Two layouts are
+understood, and **Input Layout = Auto detect** (the default) tells them apart:
+
+**Turnaround strip**: figures side by side, left to right: front, left, back and
+optionally right, with some empty space between them. This is the usual character
+turnaround sheet; the image is split at the gaps, so T-pose arms are fine as long as
+they don't touch the next figure.
+
+```
+ front    left    back   (right)
+```
+
+**2x2 sheet**:
 
 ```
 ┌───────┬───────┐
@@ -17,12 +29,14 @@ Modly passes one image to a generator, so the views travel inside it as a **2x2 
 └───────┴───────┘
 ```
 
-- **front** is required; leave any other cell blank (plain white or transparent) to skip it.
-- **left** is the object's own left side: turn the object 90° clockwise seen from above
-  (or walk to *your* right around it). **right** is the opposite side.
+- **front** is required; leave any other view out (or its cell blank) to skip it.
+- **left** is the object's own left side: its front points to the **left edge of the
+  image** (walk to *your* right around the object). **right** is the opposite.
 - Keep the same distance, height and lighting in every view, with the object centred.
 - Backgrounds are removed automatically; images that already have a transparent
-  background keep their own cut-out.
+  background keep their own cut-out. On an opaque strip, the background should be one
+  plain colour so the gaps between figures can be found.
+- A single ordinary photo is detected as a single front view.
 
 Build a sheet from separate photos with the bundled helper (needs Python + Pillow):
 
@@ -30,8 +44,8 @@ Build a sheet from separate photos with the bundled helper (needs Python + Pillo
 python tools/make_sheet.py --front front.jpg --left left.jpg --back back.jpg -o sheet.png
 ```
 
-Then upload `sheet.png` in Modly with **Input Layout = 2x2 view sheet**. Choose
-**Single front image** to use a normal photo.
+Then upload `sheet.png` in Modly. Auto detect handles it; pick a layout explicitly only
+if detection guesses wrong.
 
 From the `modly` CLI / MCP you can skip the sheet and pass extra views as absolute paths:
 

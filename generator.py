@@ -10,7 +10,10 @@ Modly hands generators a single image, so extra views travel inside it:
                                        ├───────┼───────┤
                                        │ back  │ right │
                                        └───────┴───────┘
+  layout = "row"     turnaround strip, left to right: front, left, back[, right],
+                     split at the empty gaps between the figures
   layout = "single"  the image is the front view only
+  layout = "auto"    picks one of the above from where the figures are
 
 Blank cells (uniform colour or fully transparent) are skipped; front is required.
 Views follow Tencent's convention: "left" is the object turned 90° clockwise seen
@@ -31,7 +34,7 @@ import zipfile
 from pathlib import Path
 from typing import Callable, Optional
 
-from PIL import Image, ImageStat
+from PIL import Image, ImageChops, ImageStat
 
 from services.generators.base import BaseGenerator, smooth_progress, GenerationCancelled
 
@@ -46,6 +49,7 @@ _GITHUB_ZIP       = f"https://github.com/Tencent/Hunyuan3D-2/archive/{_HY3DGEN_C
 _VIEWS            = ("front", "left", "back", "right")
 _EXTRA_VIEW_PARAM = "{view}_image_path"
 _IMAGE_SUFFIXES   = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
+_LAYOUTS          = ("auto", "grid", "row", "single")
 
 
 class Hunyuan3DMVGenerator(BaseGenerator):
@@ -124,7 +128,7 @@ class Hunyuan3DMVGenerator(BaseGenerator):
     ) -> Path:
         import torch
 
-        layout           = str(params.get("layout", "grid"))
+        layout           = str(params.get("layout", "auto"))
         num_steps        = int(params.get("num_inference_steps", 30))
         vert_count       = int(params.get("vertex_count", 0))
         octree_res       = int(params.get("octree_resolution", 380))
@@ -199,8 +203,39 @@ class Hunyuan3DMVGenerator(BaseGenerator):
         image = Image.open(io.BytesIO(image_bytes))
         image.load()
 
+        if layout not in _LAYOUTS:
+            raise ValueError(f"Unknown layout '{layout}'. Use one of: {', '.join(_LAYOUTS)}.")
+
+        col_runs = row_runs = None
+        if layout in ("auto", "row"):
+            mask = self._foreground_mask(image)
+            sx, sy   = image.width / mask.width, image.height / mask.height
+            col_runs = [(round(a * sx), round(b * sx)) for a, b in self._runs(mask, axis=0)]
+            row_runs = [(round(a * sy), round(b * sy)) for a, b in self._runs(mask, axis=1)]
+            if layout == "auto":
+                if len(row_runs) >= 2:
+                    layout = "grid"
+                elif len(col_runs) >= 2:
+                    layout = "row"
+                else:
+                    layout = "single"
+                print(f"[Hunyuan3DMVGenerator] Auto layout: {layout} "
+                      f"({len(col_runs)} column group(s), {len(row_runs)} row group(s))")
+
         if layout == "single":
             views = {"front": image}
+        elif layout == "row":
+            if not 1 <= len(col_runs) <= len(_VIEWS):
+                raise ValueError(
+                    f"Found {len(col_runs)} separate figures in the strip; expected 1-4 "
+                    "(front, left, back, right) with empty space between them."
+                )
+            w, h = image.size
+            cuts = [0] + [(a[1] + b[0]) // 2 for a, b in zip(col_runs, col_runs[1:])] + [w]
+            views = {
+                view: image.crop((cuts[i], 0, cuts[i + 1], h))
+                for i, view in enumerate(_VIEWS[:len(col_runs)])
+            }
         elif layout == "grid":
             w, h   = image.size
             hw, hh = w // 2, h // 2
@@ -211,8 +246,6 @@ class Hunyuan3DMVGenerator(BaseGenerator):
                 "right": (hw, hh, w,  h),
             }
             views = {view: image.crop(box) for view, box in cells.items()}
-        else:
-            raise ValueError(f"Unknown layout '{layout}'. Use 'grid' or 'single'.")
 
         for view in _VIEWS[1:]:
             value = params.get(_EXTRA_VIEW_PARAM.format(view=view))
@@ -233,6 +266,48 @@ class Hunyuan3DMVGenerator(BaseGenerator):
                 "Front view is empty. With the 2x2 sheet layout the front view goes in the top-left cell."
             )
         return {v: views[v] for v in _VIEWS if v in views}
+
+    @staticmethod
+    def _foreground_mask(image: Image.Image) -> Image.Image:
+        """Binary mask of the figures, downscaled for speed (only proportions matter)."""
+        img = image.convert("RGBA")
+        img.thumbnail((512, 512))
+        alpha = img.getchannel("A")
+        if alpha.getextrema()[0] < 250:
+            return alpha.point(lambda a: 255 if a > 16 else 0)
+        # Opaque image: background is whatever colour the corners share.
+        rgb = img.convert("RGB")
+        w, h = rgb.size
+        corners = [rgb.getpixel(p) for p in ((0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1))]
+        bg = tuple(sorted(c[i] for c in corners)[1] for i in range(3))
+        diff = ImageChops.difference(rgb, Image.new("RGB", rgb.size, bg))
+        return ImageChops.lighter(ImageChops.lighter(*diff.split()[:2]), diff.split()[2]).point(
+            lambda d: 255 if d > 32 else 0
+        )
+
+    @staticmethod
+    def _runs(mask: Image.Image, axis: int) -> list:
+        """
+        Groups of occupied columns (axis=0) or rows (axis=1) in a mask, as
+        (start, end) in mask pixels. Specks are ignored.
+        """
+        w, h = mask.size
+        length, across = (w, h) if axis == 0 else (h, w)
+        px = mask.load()
+        counts = [
+            sum(1 for j in range(across) if px[(i, j) if axis == 0 else (j, i)])
+            for i in range(length)
+        ]
+        runs, start = [], None
+        for i, n in enumerate(counts + [0]):
+            occupied = n > across * 0.005
+            if occupied and start is None:
+                start = i
+            elif not occupied and start is not None:
+                if i - start >= length * 0.02:
+                    runs.append((start, i))
+                start = None
+        return runs
 
     @staticmethod
     def _is_blank(img: Image.Image) -> bool:
@@ -362,12 +437,14 @@ class Hunyuan3DMVGenerator(BaseGenerator):
                 "id":      "layout",
                 "label":   "Input Layout",
                 "type":    "select",
-                "default": "grid",
+                "default": "auto",
                 "options": [
+                    {"value": "auto",   "label": "Auto detect"},
+                    {"value": "row",    "label": "Turnaround strip (front, left, back, right)"},
                     {"value": "grid",   "label": "2x2 view sheet"},
                     {"value": "single", "label": "Single front image"},
                 ],
-                "tooltip": "2x2 sheet: top-left front, top-right left, bottom-left back, bottom-right right. Leave a cell blank to skip that view.",
+                "tooltip": "Auto detects the layout. 2x2 sheet: front | left / back | right. Strip: front, left, back[, right] side by side with space between. Blank cells are skipped.",
             },
             {
                 "id":      "num_inference_steps",
