@@ -20,6 +20,7 @@ Headless callers (CLI / MCP) may also pass absolute file paths in params as
 `left_image_path`, `back_image_path`, `right_image_path`; these override the
 matching sheet cell.
 """
+import hashlib
 import io
 import random
 import sys
@@ -36,10 +37,15 @@ from services.generators.base import BaseGenerator, smooth_progress, GenerationC
 
 _HF_REPO_ID       = "tencent/Hunyuan3D-2mv"
 _SUBFOLDER        = "hunyuan3d-dit-v2-mv"
-_GITHUB_ZIP       = "https://github.com/Tencent/Hunyuan3D-2/archive/refs/heads/main.zip"
+# hy3dgen is fetched from a pinned commit and checked against its archive hash
+# before any of it is imported.
+_HY3DGEN_COMMIT   = "f8db63096c8282cb27354314d896feba5ba6ff8a"
+_HY3DGEN_SHA256   = "1be140879646034a98941e494072ce0ab26918fdc2fb59210443d56d41bc5622"
+_GITHUB_ZIP       = f"https://github.com/Tencent/Hunyuan3D-2/archive/{_HY3DGEN_COMMIT}.zip"
 
 _VIEWS            = ("front", "left", "back", "right")
 _EXTRA_VIEW_PARAM = "{view}_image_path"
+_IMAGE_SUFFIXES   = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 
 
 class Hunyuan3DMVGenerator(BaseGenerator):
@@ -212,7 +218,9 @@ class Hunyuan3DMVGenerator(BaseGenerator):
             value = params.get(_EXTRA_VIEW_PARAM.format(view=view))
             if not value:
                 continue
-            p = Path(str(value)).expanduser()
+            p = Path(str(value)).expanduser().resolve()
+            if p.suffix.lower() not in _IMAGE_SUFFIXES:
+                raise ValueError(f"{view} view must be an image file ({', '.join(sorted(_IMAGE_SUFFIXES))}): {p}")
             if not p.is_file():
                 raise FileNotFoundError(f"{view} view image not found: {p}")
             img = Image.open(p)
@@ -320,17 +328,25 @@ class Hunyuan3DMVGenerator(BaseGenerator):
         print("[Hunyuan3DMVGenerator] Downloading hy3dgen source from GitHub…")
         with urllib.request.urlopen(_GITHUB_ZIP, timeout=180) as resp:
             data = resp.read()
+        digest = hashlib.sha256(data).hexdigest()
+        if digest != _HY3DGEN_SHA256:
+            raise RuntimeError(
+                f"hy3dgen archive checksum mismatch (expected {_HY3DGEN_SHA256}, got {digest}); refusing to install it."
+            )
         print("[Hunyuan3DMVGenerator] Extracting hy3dgen…")
 
-        prefix = "Hunyuan3D-2-main/hy3dgen/"
-        strip  = "Hunyuan3D-2-main/"
+        strip  = f"Hunyuan3D-2-{_HY3DGEN_COMMIT}/"
+        prefix = f"{strip}hy3dgen/"
+        root   = dest.resolve()
 
         with zipfile.ZipFile(io.BytesIO(data)) as zf:
             for member in zf.namelist():
                 if not member.startswith(prefix):
                     continue
                 rel    = member[len(strip):]
-                target = dest / rel
+                target = (dest / rel).resolve()
+                if not target.is_relative_to(root):
+                    raise RuntimeError(f"Refusing to extract outside {dest}: {member}")
                 if member.endswith("/"):
                     target.mkdir(parents=True, exist_ok=True)
                 else:
