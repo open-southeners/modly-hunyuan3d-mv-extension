@@ -1,0 +1,108 @@
+{
+  "id": "hunyuan3d-mv",
+  "name": "Hunyuan3D 2 MV",
+  "type": "model",
+  "description": "Multi-view Hunyuan3D 2 shape generation. Upload a 2x2 view sheet (front | left / back | right) or a single front image; empty cells are skipped. Geometry only, no textures.",
+  "version": "0.1.0",
+  "author": "Open Southeners",
+  "generator_class": "Hunyuan3DMVGenerator",
+  "tags": [
+    "image-to-3d",
+    "multi-view"
+  ],
+  "nodes": [
+    {
+      "id": "generate",
+      "name": "Generate Mesh (Multi-view)",
+      "input": "image",
+      "output": "mesh",
+      "hf_repo": "tencent/Hunyuan3D-2mv",
+      "download_check": "hunyuan3d-dit-v2-mv",
+      "hf_skip_prefixes": [
+        "hunyuan3d-dit-v2-mv-fast/",
+        "hunyuan3d-dit-v2-mv-turbo/",
+        "hunyuan3d-dit-v2-mv/model.fp16.ckpt"
+      ],
+      "params_schema": [
+        {
+          "id": "layout",
+          "label": "Input Layout",
+          "type": "select",
+          "default": "grid",
+          "options": [
+            {
+              "value": "grid",
+              "label": "2x2 view sheet"
+            },
+            {
+              "value": "single",
+              "label": "Single front image"
+            }
+          ],
+          "tooltip": "2x2 sheet: top-left front, top-right left, bottom-left back, bottom-right right. Leave a cell blank to skip that view."
+        },
+        {
+          "id": "num_inference_steps",
+          "label": "Quality",
+          "type": "select",
+          "default": 30,
+          "options": [
+            {
+              "value": 10,
+              "label": "Fast"
+            },
+            {
+              "value": 30,
+              "label": "Balanced"
+            },
+            {
+              "value": 50,
+              "label": "High"
+            }
+          ],
+          "tooltip": "Number of diffusion steps. More steps = better quality but slower."
+        },
+        {
+          "id": "octree_resolution",
+          "label": "Mesh Resolution",
+          "type": "select",
+          "default": 380,
+          "options": [
+            {
+              "value": 256,
+              "label": "Low"
+            },
+            {
+              "value": 380,
+              "label": "Medium"
+            },
+            {
+              "value": 512,
+              "label": "High"
+            }
+          ],
+          "tooltip": "Octree resolution for mesh reconstruction. Higher = more detail but slower and more VRAM."
+        },
+        {
+          "id": "guidance_scale",
+          "label": "Guidance Scale",
+          "type": "float",
+          "default": 5.5,
+          "min": 1,
+          "max": 10,
+          "step": 0.5,
+          "tooltip": "Classifier-free guidance strength. Higher = closer to the input views."
+        },
+        {
+          "id": "seed",
+          "label": "Seed",
+          "type": "int",
+          "default": -1,
+          "min": -1,
+          "max": 4294967295,
+          "tooltip": "Seed for reproducibility. Set to -1 for a random seed."
+        }
+      ]
+    }
+  ]
+}
